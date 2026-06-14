@@ -1,0 +1,9 @@
+{
+  "name": "fast-media-browser",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "cargo watch -q -c -w src/ -x run",
+    "tauri": "cargo watch -q -c -w src/ -x run",
+    "build:desktop": "cargo build --release && cargo install cargo-packager && cargo packager --release && powershell -Command \"Move-Item -Path dist\\fast_media_browser_rs_*_x64-setup.exe -Destination 'dist\\Vidi File Management.exe' -Force\""
+  }
+}

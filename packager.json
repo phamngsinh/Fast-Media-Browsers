@@ -1,0 +1,17 @@
+{
+  "productName": "Vidi File Management",
+  "identifier": "com.vidi.filemanagement",
+  "publisher": "Vidi",
+  "version": "0.1.0",
+  "formats": ["nsis"],
+  "outDir": "dist",
+  "binaries": [
+    {
+      "path": "target/release/fast_media_browser_rs.exe",
+      "main": true
+    }
+  ],
+  "nsis": {
+    "installMode": "currentUser"
+  }
+}
