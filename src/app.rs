@@ -69,6 +69,12 @@ pub struct MediaBrowserApp {
     // Theme state
     theme: AppTheme,
     use_os_icons: bool,
+
+    // Search state
+    search_query: String,
+    search_results: Option<Vec<PathBuf>>,
+    search_recursive: bool,
+    focus_search: bool,
 }
 
 impl Default for MediaBrowserApp {
@@ -94,6 +100,10 @@ impl Default for MediaBrowserApp {
             last_navigated_dir: None,
             theme: AppTheme::Light,
             use_os_icons: true,
+            search_query: String::new(),
+            search_results: None,
+            search_recursive: false,
+            focus_search: false,
         };
         
         app.refresh_drives();
@@ -113,6 +123,11 @@ impl MediaBrowserApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        // Ctrl+F focuses search - checked first so it works even when a text field is active
+        if ctx.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F))) {
+            self.focus_search = true;
+        }
+
         if self.renaming_path.is_some() {
             return;
         }
@@ -245,6 +260,43 @@ impl MediaBrowserApp {
                 a.file_name().cmp(&b.file_name())
             }
         });
+        self.search_query.clear();
+        self.search_results = None;
+    }
+
+    fn perform_search(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_results = None;
+            return;
+        }
+        let query = self.search_query.to_lowercase();
+        if self.search_recursive {
+            let mut results = Vec::new();
+            for entry in walkdir::WalkDir::new(&self.current_dir)
+                .max_depth(8)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if entry.path() == self.current_dir {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_lowercase();
+                if name.contains(&query) {
+                    results.push(entry.path().to_path_buf());
+                }
+            }
+            self.search_results = Some(results);
+        } else {
+            let results = self.entries.iter()
+                .filter(|p| {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().to_lowercase().contains(&query))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            self.search_results = Some(results);
+        }
     }
 
     fn ui_left_panel(&mut self, ctx: &egui::Context) {
@@ -505,14 +557,73 @@ impl MediaBrowserApp {
             });
             ui.separator();
 
+            // Search bar
+            ui.horizontal(|ui| {
+                ui.label("🔍");
+                let search_response = ui.add(
+                    egui::TextEdit::singleline(&mut self.search_query)
+                        .hint_text("Tìm kiếm... (Ctrl+F)")
+                        .desired_width(220.0)
+                );
+
+                if self.focus_search {
+                    search_response.request_focus();
+                    self.focus_search = false;
+                }
+
+                if search_response.changed() {
+                    if self.search_query.is_empty() {
+                        self.search_results = None;
+                    } else if !self.search_recursive {
+                        let query = self.search_query.to_lowercase();
+                        let results = self.entries.iter()
+                            .filter(|p| {
+                                p.file_name()
+                                    .map(|n| n.to_string_lossy().to_lowercase().contains(&query))
+                                    .unwrap_or(false)
+                            })
+                            .cloned()
+                            .collect();
+                        self.search_results = Some(results);
+                    }
+                }
+
+                if search_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    self.perform_search();
+                }
+
+                if ui.button("✕").clicked() {
+                    self.search_query.clear();
+                    self.search_results = None;
+                }
+
+                ui.checkbox(&mut self.search_recursive, "Tìm trong thư mục con");
+
+                if ui.button("Tìm").clicked() {
+                    self.perform_search();
+                }
+
+                if let Some(ref results) = self.search_results {
+                    ui.separator();
+                    ui.label(format!("Tìm thấy: {} kết quả", results.len()));
+                }
+            });
+            ui.separator();
+
             let mut path_to_open = None;
             let mut item_rects = Vec::new(); // Lưu bounding box để làm drag select
+
+            let visible_entries: Vec<PathBuf> = if let Some(ref results) = self.search_results {
+                results.clone()
+            } else {
+                self.entries.clone()
+            };
 
             egui::ScrollArea::vertical().show(ui, |ui| {
                 if self.view_mode == ViewMode::Grid {
                     let item_size = egui::vec2(160.0, 190.0);
                     ui.horizontal_wrapped(|ui| {
-                        for (index, path) in self.entries.iter().enumerate() {
+                        for (index, path) in visible_entries.iter().enumerate() {
                             let (rect, response) = ui.allocate_exact_size(item_size, egui::Sense::click());
                             item_rects.push((index, path.clone(), rect));
                             
@@ -594,7 +705,7 @@ impl MediaBrowserApp {
                                             let start = last_idx.min(index);
                                             let end = last_idx.max(index);
                                             for i in start..=end {
-                                                self.selected_items.insert(self.entries[i].clone());
+                                                self.selected_items.insert(visible_entries[i].clone());
                                             }
                                         }
                                     } else {
@@ -685,7 +796,7 @@ impl MediaBrowserApp {
                             header.col(|ui| { ui.heading("Type"); });
                         })
                         .body(|mut body| {
-                            for (index, path) in self.entries.iter().enumerate() {
+                            for (index, path) in visible_entries.iter().enumerate() {
                                 let is_selected = self.selected_items.contains(path) || self.drag_selected_items.contains(path);
                                 
                                 body.row(25.0, |mut row| {
@@ -726,7 +837,7 @@ impl MediaBrowserApp {
                                                     let start = last_idx.min(index);
                                                     let end = last_idx.max(index);
                                                     for i in start..=end {
-                                                        self.selected_items.insert(self.entries[i].clone());
+                                                        self.selected_items.insert(visible_entries[i].clone());
                                                     }
                                                 }
                                             } else {
@@ -1005,7 +1116,11 @@ impl eframe::App for MediaBrowserApp {
         // BOTTOM PANEL (Thanh trạng thái)
         egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(format!("Tổng số mục: {}", self.entries.len()));
+                if let Some(ref results) = self.search_results {
+                    ui.label(format!("Kết quả tìm kiếm: {} mục", results.len()));
+                } else {
+                    ui.label(format!("Tổng số mục: {}", self.entries.len()));
+                }
                 ui.separator();
                 
                 let selected_paths: Vec<PathBuf> = self.selected_items.iter().cloned().collect();
